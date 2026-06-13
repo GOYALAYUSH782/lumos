@@ -4,7 +4,8 @@ _Last updated: 2026-06-13. This is the living handoff dashboard — update it as
 
 ## Where things stand
 **Phase 1 (Lamp) is built and working**, redesigned once after review. The app
-builds clean (`npm run build`) and runs via `npm run dev`. Next up is Phase 2 (Music).
+builds clean (`npm run build`) and runs via `npm run dev`. The project now lives on
+personal GitHub at **https://github.com/GOYALAYUSH782/lumos** (public). Next up is Phase 2 (Music).
 
 ## ✅ Done
 - Project scaffolded: **Vite + React + TS + Tailwind + shadcn-style** PWA, deployable as static site.
@@ -21,7 +22,7 @@ builds clean (`npm run build`) and runs via `npm run dev`. Next up is Phase 2 (M
 - Repo prepared for personal GitHub: cleaned of internal references, lockfile re-pointed to public npm, `.gitignore`, LICENSE, docs.
 
 ## 🔄 In progress
-- This migration/documentation pass (moving to personal GitHub).
+- (nothing — migration to personal GitHub is complete)
 
 ## ⏳ Pending / next
 - **Phase 2 — Music** (the viral hook; should launch publicly alongside Lamp). Beat detection already proven in `prototype/index.html`.
