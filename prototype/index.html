@@ -1,0 +1,474 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+<meta name="theme-color" content="#000000" />
+<title>Lumos — Turn your monitor into a light</title>
+<link rel="manifest" href="manifest.webmanifest" />
+<link rel="icon" href="icons/icon.svg" type="image/svg+xml" />
+<style>
+  :root {
+    --ui-bg: rgba(18, 18, 22, 0.82);
+    --ui-fg: #f2f2f5;
+    --ui-dim: #9aa0aa;
+    --accent: #ffb454;
+    --radius: 14px;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #000; }
+
+  /* The light surface. Everything visual is painted here. */
+  #stage {
+    position: fixed; inset: 0;
+    background: #ffd7ae;
+    transition: background-color 220ms ease;
+    z-index: 0;
+  }
+  #viz { position: fixed; inset: 0; z-index: 1; display: none; }
+  /* dimming overlay (simulates lowering brightness, since web can't touch the backlight) */
+  #dimmer { position: fixed; inset: 0; z-index: 2; background: #000; opacity: 0; pointer-events: none; }
+
+  /* ---------- Control panel ---------- */
+  #panel {
+    position: fixed; left: 50%; bottom: 26px; transform: translateX(-50%);
+    z-index: 10; width: min(680px, calc(100vw - 32px));
+    background: var(--ui-bg); color: var(--ui-fg);
+    backdrop-filter: blur(18px) saturate(140%); -webkit-backdrop-filter: blur(18px) saturate(140%);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: var(--radius); padding: 14px 16px 16px;
+    box-shadow: 0 18px 50px rgba(0,0,0,0.45);
+    transition: opacity 400ms ease, transform 400ms ease;
+  }
+  body.hide-ui #panel { opacity: 0; transform: translate(-50%, 12px); pointer-events: none; }
+  body.hide-ui { cursor: none; }
+
+  .tabs { display: flex; gap: 6px; margin-bottom: 14px; }
+  .tab {
+    flex: 1; padding: 9px 8px; border-radius: 10px; border: 1px solid transparent;
+    background: rgba(255,255,255,0.06); color: var(--ui-dim);
+    font-size: 13px; font-weight: 600; cursor: pointer; text-align: center;
+    transition: all 160ms ease; user-select: none;
+  }
+  .tab:hover { color: var(--ui-fg); }
+  .tab.active { background: var(--accent); color: #1a1208; border-color: rgba(0,0,0,0.1); }
+
+  .mode-body { display: none; }
+  .mode-body.active { display: block; }
+
+  .row { display: flex; align-items: center; gap: 12px; margin: 11px 0; }
+  .row label { width: 92px; font-size: 12px; color: var(--ui-dim); flex-shrink: 0; }
+  input[type="range"] { flex: 1; accent-color: var(--accent); height: 22px; }
+  input[type="color"] { width: 44px; height: 30px; border: none; background: none; padding: 0; border-radius: 8px; cursor: pointer; }
+
+  .chips { display: flex; flex-wrap: wrap; gap: 7px; }
+  .chip {
+    padding: 7px 11px; border-radius: 999px; font-size: 12px; font-weight: 600;
+    border: 1px solid rgba(255,255,255,0.12); background: rgba(255,255,255,0.05);
+    color: var(--ui-fg); cursor: pointer; transition: all 140ms ease; user-select: none;
+  }
+  .chip:hover { border-color: var(--accent); }
+  .chip.active { background: var(--accent); color: #1a1208; }
+  .chip .sw { display:inline-block; width:10px; height:10px; border-radius:50%; margin-right:6px; vertical-align:middle; border:1px solid rgba(0,0,0,.2);}
+
+  .actions { display: flex; gap: 8px; margin-top: 14px; }
+  .btn {
+    flex: 1; padding: 10px; border-radius: 10px; border: 1px solid rgba(255,255,255,0.12);
+    background: rgba(255,255,255,0.06); color: var(--ui-fg);
+    font-size: 13px; font-weight: 600; cursor: pointer; transition: all 150ms ease;
+  }
+  .btn:hover { background: rgba(255,255,255,0.12); }
+  .btn.primary { background: var(--accent); color: #1a1208; border-color: transparent; }
+  .btn[hidden] { display: none; }
+
+  .hint { font-size: 11px; color: var(--ui-dim); margin-top: 10px; line-height: 1.5; }
+  .warn { color: #ff9a9a; }
+
+  /* tiny floating reveal hint when UI hidden */
+  #reveal {
+    position: fixed; bottom: 14px; left: 50%; transform: translateX(-50%);
+    z-index: 9; color: rgba(0,0,0,0.35); font-size: 11px; font-weight: 600;
+    background: rgba(255,255,255,0.25); padding: 5px 12px; border-radius: 999px;
+    opacity: 0; transition: opacity 300ms ease; pointer-events: none;
+    backdrop-filter: blur(6px);
+  }
+  body.hide-ui #reveal { opacity: 1; }
+
+  .brand { font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--ui-dim); text-align:center; margin-bottom: 10px; font-weight: 700;}
+  .brand b { color: var(--accent); }
+</style>
+</head>
+<body>
+  <div id="stage"></div>
+  <canvas id="viz"></canvas>
+  <div id="dimmer"></div>
+  <div id="reveal">move mouse to show controls</div>
+
+  <div id="panel">
+    <div class="brand">◐ <b>LUMOS</b> · your monitor is now a light</div>
+    <div class="tabs">
+      <div class="tab active" data-mode="lamp">💡 Lamp</div>
+      <div class="tab" data-mode="party">🎉 Party</div>
+      <div class="tab" data-mode="music">🎵 Music</div>
+    </div>
+
+    <!-- LAMP -->
+    <div class="mode-body active" data-mode="lamp">
+      <div class="chips" id="lampPresets"></div>
+      <div class="row">
+        <label>Warmth</label>
+        <input type="range" id="kelvin" min="1700" max="6500" step="50" value="3200" />
+      </div>
+      <div class="row">
+        <label>Brightness</label>
+        <input type="range" id="lampBright" min="8" max="100" step="1" value="100" />
+      </div>
+      <div class="row">
+        <label>Custom color</label>
+        <input type="color" id="lampColor" value="#ffd7ae" />
+        <span class="hint" style="margin:0">overrides warmth</span>
+      </div>
+    </div>
+
+    <!-- PARTY -->
+    <div class="mode-body" data-mode="party">
+      <div class="chips" id="partyPresets"></div>
+      <div class="row">
+        <label>Speed</label>
+        <input type="range" id="partySpeed" min="1" max="100" step="1" value="40" />
+      </div>
+      <div class="row">
+        <label>Brightness</label>
+        <input type="range" id="partyBright" min="10" max="100" step="1" value="100" />
+      </div>
+      <div class="hint warn" id="strobeWarn" style="display:none">⚠ Strobe flashes rapidly — avoid if photosensitive / epileptic.</div>
+    </div>
+
+    <!-- MUSIC -->
+    <div class="mode-body" data-mode="music">
+      <div class="chips" id="musicPresets"></div>
+      <div class="row">
+        <label>Sensitivity</label>
+        <input type="range" id="sensitivity" min="1" max="100" step="1" value="55" />
+      </div>
+      <div class="row">
+        <label>Brightness</label>
+        <input type="range" id="musicBright" min="10" max="100" step="1" value="100" />
+      </div>
+      <div class="actions">
+        <button class="btn primary" id="micBtn">🎤 Use microphone</button>
+        <button class="btn" id="tabBtn">🔊 Capture tab/system audio</button>
+      </div>
+      <div class="hint" id="audioStatus">Pick an audio source. Mic works everywhere; tab/system capture is Chrome/Edge only and gives a cleaner signal.</div>
+    </div>
+
+    <div class="actions">
+      <button class="btn primary" id="fsBtn">⛶ Fullscreen</button>
+      <button class="btn" id="screenBtn" hidden>🖥 Choose monitor</button>
+      <button class="btn" id="installBtn" hidden>⬇ Install app</button>
+    </div>
+    <div class="hint">Keeps the screen awake automatically. Move the window onto your spare monitor, then go fullscreen. Settings are remembered.</div>
+  </div>
+
+<script>
+"use strict";
+
+/* ============================================================
+   Lumos — monitor-as-light web app
+   Modes: lamp (color temp), party (animated washes), music (audio-reactive)
+   ============================================================ */
+
+const $ = (id) => document.getElementById(id);
+const stage = $("stage");
+const dimmer = $("dimmer");
+const viz = $("viz");
+const vctx = viz.getContext("2d");
+
+const state = JSON.parse(localStorage.getItem("lumos") || "null") || {
+  mode: "lamp",
+  kelvin: 3200, lampBright: 100, lampColor: "#ffd7ae", useCustom: false,
+  party: "rainbow", partySpeed: 40, partyBright: 100,
+  music: "pulse", sensitivity: 55, musicBright: 100,
+};
+const save = () => localStorage.setItem("lumos", JSON.stringify(state));
+
+/* ---------- color helpers ---------- */
+// Tanner Helland blackbody approximation: Kelvin -> {r,g,b}
+function kelvinToRGB(k) {
+  const t = k / 100;
+  let r, g, b;
+  if (t <= 66) { r = 255; } else { r = 329.7 * Math.pow(t - 60, -0.1332); }
+  if (t <= 66) { g = 99.47 * Math.log(t) - 161.12; } else { g = 288.12 * Math.pow(t - 60, -0.0755); }
+  if (t >= 66) { b = 255; } else if (t <= 19) { b = 0; } else { b = 138.52 * Math.log(t - 10) - 305.04; }
+  const c = (x) => Math.max(0, Math.min(255, Math.round(x)));
+  return { r: c(r), g: c(g), b: c(b) };
+}
+const hexToRGB = (h) => ({ r: parseInt(h.slice(1,3),16), g: parseInt(h.slice(3,5),16), b: parseInt(h.slice(5,7),16) });
+const rgbStr = ({r,g,b}) => `rgb(${r|0},${g|0},${b|0})`;
+function hslToRGB(h, s, l) {
+  s/=100; l/=100;
+  const k = n => (n + h/30) % 12;
+  const a = s * Math.min(l, 1-l);
+  const f = n => l - a * Math.max(-1, Math.min(k(n)-3, Math.min(9-k(n), 1)));
+  return { r: 255*f(0), g: 255*f(8), b: 255*f(4) };
+}
+
+/* ---------- presets ---------- */
+const LAMP_PRESETS = [
+  { name: "Candle", k: 1800 }, { name: "Warm", k: 2700 }, { name: "Reading", k: 3500 },
+  { name: "Neutral", k: 4200 }, { name: "Daylight", k: 5600 }, { name: "Cool white", k: 6500 },
+  { name: "Video call", custom: "#fff4e6" },
+];
+const PARTY_PRESETS = [
+  { id: "rainbow", name: "Rainbow flow" }, { id: "breathe", name: "Breathe" },
+  { id: "twocolor", name: "Color wash" }, { id: "fire", name: "Fireplace" },
+  { id: "ocean", name: "Ocean" }, { id: "strobe", name: "Strobe" }, { id: "random", name: "Random pops" },
+];
+const MUSIC_PRESETS = [
+  { id: "pulse", name: "Beat pulse" }, { id: "bars", name: "Spectrum bars" },
+  { id: "wash", name: "Frequency wash" }, { id: "strobeBeat", name: "Beat strobe" },
+];
+
+function buildChips(containerId, items, getActive, onPick) {
+  const c = $(containerId); c.innerHTML = "";
+  items.forEach((it) => {
+    const el = document.createElement("div");
+    el.className = "chip" + (getActive(it) ? " active" : "");
+    el.textContent = it.name;
+    el.onclick = () => { onPick(it); [...c.children].forEach(x=>x.classList.remove("active")); el.classList.add("active"); };
+    c.appendChild(el);
+  });
+}
+
+/* ---------- mode switching ---------- */
+function setMode(mode) {
+  state.mode = mode; save();
+  document.querySelectorAll(".tab").forEach(t => t.classList.toggle("active", t.dataset.mode === mode));
+  document.querySelectorAll(".mode-body").forEach(b => b.classList.toggle("active", b.dataset.mode === mode));
+  viz.style.display = (mode === "music") ? "block" : "none";
+  stage.style.display = (mode === "music") ? "none" : "block";
+  if (mode === "lamp") applyLamp();
+  if (mode === "party") startParty();
+  else stopParty();
+  if (mode === "music") startMusicLoop();
+  else stopMusicLoop();
+}
+
+/* ---------- LAMP ---------- */
+function applyLamp() {
+  const base = state.useCustom ? hexToRGB(state.lampColor) : kelvinToRGB(state.kelvin);
+  stage.style.background = rgbStr(base);
+  dimmer.style.opacity = (1 - state.lampBright / 100) * 0.92;
+}
+
+/* ---------- PARTY ---------- */
+let partyRAF = null, partyT = 0;
+function stopParty(){ if (partyRAF) cancelAnimationFrame(partyRAF); partyRAF = null; }
+function startParty() {
+  stopParty();
+  $("strobeWarn").style.display = state.party === "strobe" ? "block" : "none";
+  dimmer.style.opacity = (1 - state.partyBright / 100) * 0.92;
+  let last = performance.now();
+  const frame = (now) => {
+    const dt = Math.min(64, now - last); last = now;
+    partyT += dt * (state.partySpeed / 50) * 0.06;
+    let col;
+    switch (state.party) {
+      case "rainbow": col = hslToRGB((partyT*8) % 360, 90, 55); break;
+      case "breathe": { const p = (Math.sin(partyT*0.4)+1)/2; col = hslToRGB(280, 70, 20 + p*45); break; }
+      case "twocolor": { const p = (Math.sin(partyT*0.5)+1)/2; col = hslToRGB(p<0.5?330:190, 85, 55); break; }
+      case "fire": { const fl = 0.5 + Math.random()*0.5; col = hslToRGB(10 + Math.random()*25, 95, 40*fl + 15); break; }
+      case "ocean": { const p = (Math.sin(partyT*0.3)+1)/2; col = hslToRGB(190 + p*40, 80, 35 + p*20); break; }
+      case "strobe": { const on = Math.floor(partyT*1.2) % 2 === 0; col = on ? {r:255,g:255,b:255} : {r:0,g:0,b:0}; break; }
+      case "random": { if (Math.floor(partyT) !== Math.floor(partyT - dt*0.02)) col = hslToRGB(Math.random()*360, 90, 55); break; }
+      default: col = {r:255,g:255,b:255};
+    }
+    if (col) stage.style.transition = state.party === "strobe" ? "none" : "background-color 90ms linear", stage.style.background = rgbStr(col);
+    partyRAF = requestAnimationFrame(frame);
+  };
+  partyRAF = requestAnimationFrame(frame);
+}
+
+/* ---------- MUSIC ---------- */
+let audioCtx = null, analyser = null, freqData = null, micStream = null, musicRAF = null;
+let beatEnergy = 0, beatAvg = 0, lastBeat = 0, flashLevel = 0;
+
+async function startMic() {
+  try {
+    const s = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation:false, noiseSuppression:false, autoGainControl:false }});
+    attachAudio(s); $("audioStatus").textContent = "🎤 Listening via microphone. Play music near the mic.";
+  } catch(e){ $("audioStatus").innerHTML = '<span class="warn">Mic denied or unavailable: '+e.message+'</span>'; }
+}
+async function startTab() {
+  try {
+    const s = await navigator.mediaDevices.getDisplayMedia({ video:true, audio:true });
+    if (!s.getAudioTracks().length) { $("audioStatus").innerHTML = '<span class="warn">No audio track — make sure to check "Share tab audio". Only Chrome/Edge support this.</span>'; s.getTracks().forEach(t=>t.stop()); return; }
+    s.getVideoTracks().forEach(t=>t.stop()); // we only want the audio
+    attachAudio(s); $("audioStatus").textContent = "🔊 Listening to captured audio (clean signal).";
+  } catch(e){ $("audioStatus").innerHTML = '<span class="warn">Capture cancelled/failed: '+e.message+'</span>'; }
+}
+function attachAudio(stream) {
+  if (micStream) micStream.getTracks().forEach(t=>t.stop());
+  micStream = stream;
+  if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  audioCtx.resume();
+  const src = audioCtx.createMediaStreamSource(stream);
+  analyser = audioCtx.createAnalyser();
+  analyser.fftSize = 1024; analyser.smoothingTimeConstant = 0.78;
+  freqData = new Uint8Array(analyser.frequencyBinCount);
+  src.connect(analyser);
+}
+
+function stopMusicLoop(){ if (musicRAF) cancelAnimationFrame(musicRAF); musicRAF = null; }
+function startMusicLoop() {
+  resizeViz(); stopMusicLoop();
+  dimmer.style.opacity = (1 - state.musicBright / 100) * 0.92;
+  const frame = () => {
+    musicRAF = requestAnimationFrame(frame);
+    vctx.clearRect(0,0,viz.width,viz.height);
+    if (!analyser) {
+      vctx.fillStyle = "#111"; vctx.fillRect(0,0,viz.width,viz.height);
+      vctx.fillStyle = "#666"; vctx.font = "600 20px -apple-system,sans-serif"; vctx.textAlign="center";
+      vctx.fillText("Pick an audio source below ↓", viz.width/2, viz.height/2);
+      return;
+    }
+    analyser.getByteFrequencyData(freqData);
+    const sens = state.sensitivity / 50; // 0.02..2
+
+    // bass energy for beat detection (first ~8% of bins ~= low freqs)
+    const bassBins = Math.max(4, Math.floor(freqData.length * 0.08));
+    let bass = 0; for (let i=0;i<bassBins;i++) bass += freqData[i];
+    bass /= bassBins;
+    beatEnergy = bass;
+    beatAvg = beatAvg * 0.93 + bass * 0.07;
+    const now = performance.now();
+    const isBeat = beatEnergy > beatAvg * (1.28 / sens) && beatEnergy > 24 && (now - lastBeat) > 180;
+    if (isBeat) { lastBeat = now; flashLevel = 1; }
+    flashLevel *= 0.90;
+
+    renderMusic(sens);
+  };
+  musicRAF = requestAnimationFrame(frame);
+}
+function renderMusic(sens) {
+  const W = viz.width, H = viz.height;
+  const hueBase = (performance.now() * 0.02) % 360;
+  if (state.music === "pulse") {
+    const c = hslToRGB(hueBase, 85, 25 + flashLevel*45);
+    vctx.fillStyle = rgbStr(c); vctx.fillRect(0,0,W,H);
+  } else if (state.music === "strobeBeat") {
+    vctx.fillStyle = flashLevel > 0.5 ? "#fff" : "#000"; vctx.fillRect(0,0,W,H);
+  } else if (state.music === "wash") {
+    let lo=0,mid=0,hi=0, n=freqData.length;
+    for (let i=0;i<n;i++){ const v=freqData[i]; if(i<n*0.1)lo+=v; else if(i<n*0.4)mid+=v; else hi+=v; }
+    lo/=(n*0.1); mid/=(n*0.3); hi/=(n*0.6);
+    const g = vctx.createLinearGradient(0,0,W,H);
+    g.addColorStop(0, rgbStr(hslToRGB(0, 90, Math.min(60, lo*sens*0.4))));
+    g.addColorStop(0.5, rgbStr(hslToRGB(130, 90, Math.min(60, mid*sens*0.4))));
+    g.addColorStop(1, rgbStr(hslToRGB(220, 90, Math.min(60, hi*sens*0.5))));
+    vctx.fillStyle = g; vctx.fillRect(0,0,W,H);
+  } else { // bars
+    vctx.fillStyle = "#000"; vctx.fillRect(0,0,W,H);
+    const bars = 64, step = Math.floor(freqData.length / bars);
+    const bw = W / bars;
+    for (let i=0;i<bars;i++){
+      let v=0; for(let j=0;j<step;j++) v+=freqData[i*step+j]; v/=step;
+      const h = (v/255) * H * sens;
+      vctx.fillStyle = rgbStr(hslToRGB((i/bars*300 + hueBase)%360, 90, 55));
+      vctx.fillRect(i*bw, H-h, bw-2, h);
+    }
+  }
+}
+function resizeViz(){ viz.width = innerWidth; viz.height = innerHeight; }
+
+/* ---------- fullscreen / wake lock / multi-monitor ---------- */
+let wakeLock = null;
+async function requestWakeLock(){
+  try { if ("wakeLock" in navigator) { wakeLock = await navigator.wakeLock.request("screen"); } } catch(e){}
+}
+document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") requestWakeLock(); });
+
+let targetScreen = null;
+async function goFullscreen() {
+  const opts = {};
+  if (targetScreen) opts.screen = targetScreen;
+  try { await document.documentElement.requestFullscreen(opts); } catch(e){ try{ await document.documentElement.requestFullscreen(); }catch(_){} }
+  requestWakeLock();
+}
+async function chooseMonitor() {
+  if (!("getScreenDetails" in window)) return;
+  try {
+    const d = await window.getScreenDetails();
+    const external = d.screens.find(s => !s.isInternal) || d.screens.find(s => !s.isPrimary);
+    targetScreen = external || d.currentScreen;
+    $("audioStatus") && ( $("screenBtn").textContent = "🖥 " + (targetScreen.label || "External monitor") );
+    goFullscreen();
+  } catch(e){}
+}
+
+/* ---------- auto-hide UI ---------- */
+let hideTimer = null;
+function poke(){
+  document.body.classList.remove("hide-ui");
+  clearTimeout(hideTimer);
+  hideTimer = setTimeout(() => document.body.classList.add("hide-ui"), 3500);
+}
+["mousemove","touchstart","keydown","click"].forEach(ev => window.addEventListener(ev, poke, {passive:true}));
+
+/* ---------- PWA install ---------- */
+let deferredPrompt = null;
+window.addEventListener("beforeinstallprompt", (e) => { e.preventDefault(); deferredPrompt = e; $("installBtn").hidden = false; });
+$("installBtn").onclick = async () => { if (deferredPrompt){ deferredPrompt.prompt(); deferredPrompt = null; $("installBtn").hidden = true; } };
+
+/* ---------- wire up UI ---------- */
+function initUI() {
+  // tabs
+  document.querySelectorAll(".tab").forEach(t => t.onclick = () => setMode(t.dataset.mode));
+
+  // lamp
+  buildChips("lampPresets", LAMP_PRESETS,
+    (p) => p.custom ? (state.useCustom && state.lampColor === p.custom) : (!state.useCustom && state.kelvin === p.k),
+    (p) => {
+      if (p.custom){ state.useCustom = true; state.lampColor = p.custom; $("lampColor").value = p.custom; }
+      else { state.useCustom = false; state.kelvin = p.k; $("kelvin").value = p.k; }
+      save(); applyLamp();
+    });
+  $("kelvin").value = state.kelvin; $("lampBright").value = state.lampBright; $("lampColor").value = state.lampColor;
+  $("kelvin").oninput = (e) => { state.kelvin = +e.target.value; state.useCustom = false; save(); applyLamp(); };
+  $("lampBright").oninput = (e) => { state.lampBright = +e.target.value; save(); applyLamp(); };
+  $("lampColor").oninput = (e) => { state.lampColor = e.target.value; state.useCustom = true; save(); applyLamp(); };
+
+  // party
+  buildChips("partyPresets", PARTY_PRESETS, (p)=>state.party===p.id, (p)=>{ state.party=p.id; save(); startParty(); });
+  $("partySpeed").value = state.partySpeed; $("partyBright").value = state.partyBright;
+  $("partySpeed").oninput = (e)=>{ state.partySpeed=+e.target.value; save(); };
+  $("partyBright").oninput = (e)=>{ state.partyBright=+e.target.value; save(); dimmer.style.opacity=(1-state.partyBright/100)*0.92; };
+
+  // music
+  buildChips("musicPresets", MUSIC_PRESETS, (p)=>state.music===p.id, (p)=>{ state.music=p.id; save(); });
+  $("sensitivity").value = state.sensitivity; $("musicBright").value = state.musicBright;
+  $("sensitivity").oninput = (e)=>{ state.sensitivity=+e.target.value; save(); };
+  $("musicBright").oninput = (e)=>{ state.musicBright=+e.target.value; save(); dimmer.style.opacity=(1-state.musicBright/100)*0.92; };
+  $("micBtn").onclick = startMic;
+  $("tabBtn").onclick = startTab;
+
+  // actions
+  $("fsBtn").onclick = goFullscreen;
+  if ("getScreenDetails" in window) { $("screenBtn").hidden = false; $("screenBtn").onclick = chooseMonitor; }
+
+  window.addEventListener("resize", resizeViz);
+  setMode(state.mode);
+  requestWakeLock();
+  poke();
+}
+initUI();
+
+// register service worker for offline / installability
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", () => navigator.serviceWorker.register("sw.js").catch(()=>{}));
+}
+</script>
+</body>
+</html>

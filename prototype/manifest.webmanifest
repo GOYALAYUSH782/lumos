@@ -1,0 +1,14 @@
+{
+  "name": "Lumos — Monitor Light",
+  "short_name": "Lumos",
+  "description": "Turn any spare monitor into a lamp, party light, or music-reactive light. No hardware, no LEDs.",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#000000",
+  "theme_color": "#000000",
+  "orientation": "any",
+  "icons": [
+    { "src": "icons/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}
